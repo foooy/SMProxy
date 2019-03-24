@@ -15,7 +15,7 @@ class ServerCommand
     public $desc;
     public $usage;
     public $serverSetting = [];
-    const  SMPROXY_VERSION = 'v1.2.6';
+    const  SMPROXY_VERSION = 'v1.2.7';
 
     public function __construct()
     {
@@ -115,7 +115,7 @@ class ServerCommand
         }
 
         echo 'Server is reloading...', PHP_EOL;
-        posix_kill($this->serverSetting['managerPid'], SIGUSR1);
+        \swoole_process::kill($this->serverSetting['managerPid'], SIGUSR1);
         echo 'Server reload success', PHP_EOL;
     }
 
@@ -150,7 +150,7 @@ class ServerCommand
 
             $this->serverSetting['masterPid'] = $pids[0];
             $this->serverSetting['managerPid'] = $pids[1];
-            $masterIsLive = $this->serverSetting['masterPid'] && @posix_kill($this->serverSetting['managerPid'], 0);
+            $masterIsLive = $this->serverSetting['masterPid'] && @\swoole_process::kill($this->serverSetting['managerPid'], 0);
         }
 
         return $masterIsLive;

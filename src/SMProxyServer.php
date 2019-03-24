@@ -2,12 +2,12 @@
 
 namespace SMProxy;
 
-use Psr\Log\LogLevel;
 use SMProxy\Handler\Frontend\FrontendAuthenticator;
 use SMProxy\Handler\Frontend\FrontendConnection;
 use function SMProxy\Helper\array_copy;
 use function SMProxy\Helper\getBytes;
 use function SMProxy\Helper\getMysqlPackSize;
+use function SMProxy\Helper\getPackageLength;
 use function SMProxy\Helper\getString;
 use function SMProxy\Helper\initConfig;
 use function SMProxy\Helper\packageSplit;
@@ -37,6 +37,8 @@ class SMProxyServer extends BaseServer
     public $mysqlClient;
     protected $dbConfig;
     public $halfPack;
+    public $stmtId = [];
+    public $stmtPrepare = [];
 
     /**
      * 连接.
@@ -96,11 +98,30 @@ class SMProxyServer extends BaseServer
                                 $this->mysqlClient[$fd][$key]->send($data);
                             } else {
                                 $client = MySQLPool::fetch($key, $server, $fd);
-                                $result = $client ->send($data);
+                                $result = $client->send($data);
                                 if ($result) {
                                     $this->mysqlClient[$fd][$key] = $client;
                                 }
                             }
+                        }
+                        //预处理语句id记录
+                        if (isset($this->mysqlClient[$fd][$key])) {
+                            $clientId = spl_object_hash($this->mysqlClient[$fd][$key]);
+                            switch ($bin ->data[4]) {
+                                case MysqlPacket::$COM_STMT_PREPARE:
+                                    if (isset($this->stmtId[$clientId])) {
+                                        $this->stmtId[$clientId]++;
+                                    } else {
+                                        $this->stmtId[$clientId] = 1;
+                                    }
+                                    $this->stmtPrepare[$clientId][$this->stmtId[$clientId]] = $this->stmtId[$clientId];
+                                    break;
+                                case MySQLPacket::$COM_STMT_CLOSE:
+                                    $closeStmtId = getPackageLength($data, 5, 4) - 4;
+                                    unset($this->stmtPrepare[$clientId][$closeStmtId]);
+                                    break;
+                            }
+                            unset($clientId);
                         }
                     }
                 });
@@ -150,6 +171,18 @@ class SMProxyServer extends BaseServer
                         }
                     }
                 }
+                //处理预处理语句连接断开未关闭
+                $clientId = spl_object_hash($mysqlClient);
+                if (isset($this->stmtPrepare[$clientId])) {
+                    $stmtIdes = $this->stmtPrepare[$clientId] ?? [];
+                    if (!empty($stmtIdes)) {
+                        foreach ($stmtIdes as $stmtId) {
+                            $mysqlClient->send(getString(array_merge([5, 0, 0, 0, 25], getMysqlPackSize($stmtId, 4))));
+                        }
+                    }
+                    unset($this->stmtPrepare[$clientId]);
+                }
+                unset($clientId);
                 MySQLPool::recycle($mysqlClient);
             }
             unset($this->mysqlClient[$fd]);
@@ -174,16 +207,27 @@ class SMProxyServer extends BaseServer
             } else {
                 ProcessHelper::setProcessTitle('SMProxy worker  process');
             }
-            $this->dbConfig = $this->parseDbConfig(initConfig(CONFIG_PATH));
-            //初始化链接
-            MySQLPool::init($this->dbConfig);
+            try {
+                $this->dbConfig = $this->parseDbConfig(initConfig(CONFIG_PATH));
+                //初始化链接
+                MySQLPool::init($this->dbConfig);
+            } catch (MySQLException $exception) {
+                self::writeErrorMessage($exception, 'mysql');
+                $server ->shutdown();
+                return;
+            } catch (SMProxyException $exception) {
+                self::writeErrorMessage($exception, 'system');
+                $server ->shutdown();
+                return;
+            }
             if ($worker_id === (CONFIG['server']['swoole']['worker_num'] - 1)) {
                 try {
                     Coroutine::sleep(0.1);
                     $this ->setStartConns();
                 } catch (MySQLException $exception) {
+                    self::writeErrorMessage($exception, 'mysql');
                     $server ->shutdown();
-                    throw new MySQLException($exception ->getMessage(), Log::$levels[LogLevel::ERROR]);
+                    return;
                 }
                 $system_log = Log::getLogger('system');
                 $system_log->info('Worker started!');
@@ -298,34 +342,65 @@ class SMProxyServer extends BaseServer
      * @return string
      * @throws MySQLException
      */
-    private function compareModel(string &$model, \swoole_server $server, int $fd)
+    private function compareModel(string $model, \swoole_server $server, int $fd)
     {
+        /**
+         * 拼接数据库键名
+         *
+         * @param int $fd
+         * @param string $model
+         *
+         * @return string
+         */
+        $spliceKey = function (int $fd, string $model) {
+            return $this->source[$fd]->database ? $model . DB_DELIMITER . $this->source[$fd]->database : $model;
+        };
         switch ($model) {
             case 'read':
-                $key = $this->source[$fd]->database ? $model . DB_DELIMITER . $this->source[$fd]->database : $model;
+                $key = $spliceKey($fd, $model);
                 //如果没有读库 默认用写库
-                if (!array_key_exists($key, $this->dbConfig)) {
+                if (!isset($this->dbConfig[$key])) {
                     $model = 'write';
+                    $key = $spliceKey($fd, $model);
+                    //如果没有写库
+                    $this->existsDBKey($server, $fd, $model, $key);
                 }
                 break;
             case 'write':
-                $key = $this->source[$fd]->database ? $model . DB_DELIMITER . $this->source[$fd]->database : $model;
+                $key = $spliceKey($fd, $model);
                 //如果没有写库
-                if (!array_key_exists($key, $this->dbConfig)) {
-                    $message = 'SMProxy@Database config ' . ($this->source[$fd]->database ?: '') . ' ' . $model .
-                        ' is not exists!';
-                    $errMessage = self::writeErrMessage(1, $message, ErrorCode::ER_SYNTAX_ERROR, 42000);
-                    if ($server->exist($fd)) {
-                        $server->send($fd, getString($errMessage));
-                    }
-                    throw new MySQLException($message);
-                }
+                $this->existsDBKey($server, $fd, $model, $key);
                 break;
             default:
                 $key = 'write' . DB_DELIMITER . $this->source[$fd]->database;
                 break;
         }
         return $key;
+    }
+
+
+    /**
+     * 判断配置文件键是否存在
+     *
+     * @param \swoole_server $server
+     * @param int $fd
+     * @param string $model
+     * @param string $key
+     *
+     * @throws MySQLException
+     */
+    private function existsDBKey(\swoole_server $server, int $fd, string $model, string $key)
+    {
+        //如果没有写库则抛出异常
+        if (!isset($this->dbConfig[$key])) {
+            $message = 'SMProxy@Database config ' . ($this->source[$fd]->database ?: '') . ' ' . $model .
+                ' is not exists!';
+            $errMessage = self::writeErrMessage(1, $message, ErrorCode::ER_SYNTAX_ERROR, 42000);
+            if ($server->exist($fd)) {
+                $server->send($fd, getString($errMessage));
+            }
+            throw new MySQLException($message);
+        }
     }
 
     /**
@@ -401,8 +476,8 @@ class SMProxyServer extends BaseServer
             case MySQLPacket::$COM_INIT_DB:
                 // just init the frontend
                 break;
-            case MySQLPacket::$COM_QUERY:
             case MySQLPacket::$COM_STMT_PREPARE:
+            case MySQLPacket::$COM_QUERY:
                 $connection = new FrontendConnection();
                 $queryType = $connection->query($bin);
                 $hintArr   = RouteService::route(substr($data, 5, strlen($data) - 5));

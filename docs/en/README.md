@@ -7,7 +7,9 @@
 [![Gitter](https://img.shields.io/gitter/room/louislivi/SMproxy.svg?style=popout-square)](https://gitter.im/louislivi/SMproxy)
 [![license](https://img.shields.io/github/license/louislivi/SMProxy.svg?style=popout-square)](https://github.com/louislivi/SMProxy/blob/master/LICENSE)
 [![SMProxy](https://img.shields.io/badge/SMProxy-%F0%9F%92%97-pink.svg?style=popout-square)](https://github.com/louislivi/SMProxy)
-> `Github` Project address: [https://github.com/louislivi/smproxy](https://github.com/louislivi/smproxy) (support Star)
+
+> Checkout on `Github`: <https://github.com/louislivi/smproxy> (Star me if helps)
+
 ## Swoole MySQL Proxy
 
 A MySQL database connection pool based on MySQL protocol and Swoole.
@@ -56,8 +58,8 @@ See [docs/BENCHMARK-EN.md](BENCHMARK.md).
 
 ## Requirements
 
-- Swoole 2.1+  ![swoole_version](https://img.shields.io/badge/swoole-2.1+-yellow.svg?style=popout-square)
-- PHP 7.0+     ![php_version](https://img.shields.io/badge/php-7.0+-blue.svg?style=popout-square)
+- Swoole >= 2.1.3  ![swoole_version](https://img.shields.io/badge/swoole->=2.1.3-yellow.svg?style=popout-square)
+- PHP >= 7.0     ![php_version](https://img.shields.io/badge/php->=7.0-blue.svg?style=popout-square)
 
 ## Installation
 
@@ -251,18 +253,17 @@ The configuration files are located in the `smproxy/conf` directory. The upperca
 ## MySQL8.0
 
 - `SMProxy1.2.4` and above can be used directly
-- `SMProxy1.2.4` The following needs to be compatible
+- `SMProxy1.2.4` The following needs to be compatible:
+    - `MySQL-8.0` uses the more secure `caching_sha2_password` plugin by default. If you upgraded from `5.x`, all the thing should still work directly. For example, if you are creating a new `MySQL`, you need to enter `MySQL. `The command line performs the following operations to be compatible:
 
-`MySQL-8.0` uses the more secure `caching_sha2_password` plugin by default. If you upgraded from `5.x`, all the thing should still work directly. For example, if you are creating a new `MySQL`, you need to enter `MySQL. `The command line performs the following operations to be compatible:
+    ```sql
+    ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
+    Flush privileges;
+    ```
 
-```sql
-ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
-Flush privileges;
-```
+    Replace `'root'@'%'` in the statement with the user you are using, and replace `password` with its password.
 
-Replace `'root'@'%'` in the statement with the user you are using, and replace `password` with its password.
-
-If it is still not available, set `default_authentication_plugin = mysql_native_password` in my.cnf.
+    If it is still not available, set `default_authentication_plugin = mysql_native_password` in my.cnf.
 
 ## Troubleshooting
 - `SMProxy@access denied for user`
@@ -270,6 +271,8 @@ If it is still not available, set `default_authentication_plugin = mysql_native_
     - Do not configure `localhost` for database `host`.
 - `SMProxy@Database config dbname write is not exists! `
     - Change the `dbname` entry in `database.json` to your business database name.
+- `Config serverInfo->*->account is not exists! `
+    - Please review `database.json`, make sure that `databse->serverInfo->*->*->account` exists in `database->account`.
 - `Reach max connections! Cann't pending fetch!`
     - Increase `maxSpareConns` appropriately or increase the `timeout` entry in `database.json`.
 - `Must be connected before sending data!`
@@ -287,6 +290,9 @@ If it is still not available, set `default_authentication_plugin = mysql_native_
 - `502 Bad Gateway`
     - After MySQL crashes abnormally, the connection appears 502 or the connection times out. Please do not enable long connection mode.
     - If the SQL statement is too large, do not use a succession pool, which will cause the connection to be blocked and the program to be abnormal.
+- `CPU usage is too high after starting SMProxy`
+     - Because Swoole 4.2.12 and below does not open the coroutine Client read and write separation, the CPU ratio will be larger.
+     - Upgrade the Swoole version to 4.2.13 and above and upgrade the SMProxy version to 1.2.8 and above.
 
 ## Community
 

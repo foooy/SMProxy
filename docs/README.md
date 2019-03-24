@@ -7,7 +7,9 @@
 [![Gitter](https://img.shields.io/gitter/room/louislivi/SMproxy.svg?style=popout-square)](https://gitter.im/louislivi/SMproxy)
 [![license](https://img.shields.io/github/license/louislivi/SMProxy.svg?style=popout-square)](https://github.com/louislivi/SMProxy/blob/master/LICENSE)
 [![SMProxy](https://img.shields.io/badge/SMProxy-%F0%9F%92%97-pink.svg?style=popout-square)](https://github.com/louislivi/SMProxy)
+
 > `Github` 项目地址：[https://github.com/louislivi/smproxy](https://github.com/louislivi/smproxy) (支持请点Star)
+
 ## Swoole MySQL Proxy
 
 一个基于 MySQL 协议，Swoole 开发的MySQL数据库连接池。
@@ -44,8 +46,8 @@ PHP 没有连接池，所以高并发时数据库会出现连接打满的情况�
 
 ## 环境
 
-- Swoole 2.1+  ![swoole_version](https://img.shields.io/badge/swoole-2.1+-yellow.svg?style=popout-square)
-- PHP 7.0+     ![php_version](https://img.shields.io/badge/php-7.0+-blue.svg?style=popout-square)
+- Swoole >= 2.1.3  ![swoole_version](https://img.shields.io/badge/swoole->=2.1.3-yellow.svg?style=popout-square)
+- PHP >= 7.0     ![php_version](https://img.shields.io/badge/php->=7.0-blue.svg?style=popout-square)
 
 ## 安装
 
@@ -233,17 +235,16 @@ Options:
 ## MySQL8.0
 
 - `SMProxy1.2.4`及以上可直接使用
-- `SMProxy1.2.4`以下需要做兼容处理
-
-`MySQL-8.0`默认使用了安全性更强的`caching_sha2_password`插件，其他版本如果是从`5.x`升级上来的, 可以直接使用所有`MySQL`功能, 如是新建的`MySQL`, 需要进入`MySQL`命令行执行以下操作来兼容:
-
-```sql
-ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
-flush privileges;
-```
-将语句中的 `'root'@'%'` 替换成你所使用的用户, `password` 替换成其密码.
-
-如仍无法使用, 应在my.cnf中设置 `default_authentication_plugin = mysql_native_password`
+- `SMProxy1.2.4`以下需要做如下兼容处理：
+    - `MySQL-8.0`默认使用了安全性更强的`caching_sha2_password`插件，其他版本如果是从`5.x`升级上来的, 可以直接使用所有`MySQL`功能, 如是新建的`MySQL`, 需要进入`MySQL`命令行执行以下操作来兼容:
+    
+    ```sql
+    ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
+    flush privileges;
+    ```
+    将语句中的 `'root'@'%'` 替换成你所使用的用户, `password` 替换成其密码.
+    
+    如仍无法使用, 应在my.cnf中设置 `default_authentication_plugin = mysql_native_password`
 
 ## 常见问题
 - `SMProxy@access denied for user` 
@@ -251,6 +252,8 @@ flush privileges;
     - 数据库`host`请勿配置`localhost`。
 - `SMProxy@Database config dbname write is not exists! ` 
     - 请将`database.json`中的`dbname`项改为你的业务数据库名。
+- `Config serverInfo->*->account is not exists! `
+    - 请仔细比对`database.json`中`databse->serverInfo->*->*->account`是否在`database->account`下含有相对于的键值对。
 - `Reach max connections! Cann't pending fetch!` 
     - 适当增加`maxSpareConns`或增加`database.json`中的`timeout`项。
 - `Must be connected before sending data!` 
@@ -267,7 +270,10 @@ flush privileges;
     - 使用`Supervisor`和`docker`时需要使用前台运行模式(v1.2.5+使用`--console`,否则使用`daemonize`参数)否则无法正常启动。
 - `502 Bad Gateway`
     - MySQL异常崩溃后连接出现502或连接超时，请不要开启长连接模式。
-    - SQL语句过大不要使用连继池，会导致连接阻塞，程序异常。
+    - SQL语句过大不要使用连接池，会导致连接阻塞，程序异常。
+- `启动SMProxy后CPU占用过高`
+    - 因Swoole4.2.12及以下未开启协程Client读写分离所以CPU占比会比较大。
+    - 升级Swoole版本到4.2.13及以上并升级SMProxy版本到1.2.8及以上。
 
 ## 交流
 

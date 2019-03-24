@@ -3,6 +3,7 @@
 namespace SMProxy;
 
 use SMProxy\Log\Log;
+use Swoole\Coroutine\Channel;
 use SMProxy\MysqlPool\MySQLException;
 use SMProxy\MysqlPacket\ErrorPacket;
 use function SMProxy\Helper\array_iconv;
@@ -36,21 +37,27 @@ class Base extends Context
                     unset(self::$pool[\Swoole\Coroutine::getuid()]);
                 }
             } catch (SMProxyException $SMProxyException) {
-                $system_log = Log::getLogger('system');
-                $errLevel = $SMProxyException ->getCode() ? array_search($SMProxyException ->getCode(), Log::$levels) : 'error';
-                $system_log->$errLevel($SMProxyException->errorMessage());
-                if (CONFIG['server']['swoole']['daemonize'] != true) {
-                    echo '[' . ucfirst($errLevel) . '] ', $SMProxyException->errorMessage(), PHP_EOL;
-                }
+                self::writeErrorMessage($SMProxyException, 'system');
             } catch (MySQLException $MySQLException) {
-                $mysql_log = Log::getLogger('mysql');
-                $errLevel = $MySQLException ->getCode() ? array_search($MySQLException ->getCode(), Log::$levels) : 'warning';
-                $mysql_log->$errLevel($MySQLException->errorMessage());
-                if (CONFIG['server']['swoole']['daemonize'] != true) {
-                    echo  '[' . ucfirst($errLevel) . '] ', $MySQLException->errorMessage(), PHP_EOL;
-                }
+                self::writeErrorMessage($MySQLException, 'mysql');
             }
         });
+    }
+
+    /**
+     * 写入日志
+     *
+     * @param $exception
+     * @param string $tag
+     */
+    protected static function writeErrorMessage($exception, string $tag = 'mysql')
+    {
+        $log = Log::getLogger($tag);
+        $errLevel = $exception ->getCode() ? array_search($exception ->getCode(), Log::$levels) : 'warning';
+        $log->$errLevel($exception->errorMessage());
+        if (CONFIG['server']['swoole']['daemonize'] != true) {
+            echo  '[' . ucfirst($errLevel) . '] ', $exception->errorMessage(), PHP_EOL;
+        }
     }
 
     /**
@@ -94,11 +101,11 @@ class Base extends Context
                         $config['databases'][$s_key . DB_DELIMITER . $key]['serverInfo']['account'] =
                             $config['account'][$value['account']];
                     } else {
-                        throw new SMProxyException('config serverInfo->' . $s_key . '->account is not exists!');
+                        throw new SMProxyException('Config serverInfo->' . $s_key . '->account is not exists!');
                     }
                 }
             } else {
-                throw new SMProxyException('config serverInfo key ' . $database['serverInfo'] . 'is not exists!');
+                throw new SMProxyException('Config serverInfo key ' . $database['serverInfo'] . 'is not exists!');
             }
             unset($config['databases'][$key]);
         }
@@ -113,7 +120,7 @@ class Base extends Context
      *
      * @return bool
      */
-    protected static function coPop($chan, $timeout = 0)
+    protected static function coPop(Channel $chan, int $timeout = 0)
     {
         if (version_compare(swoole_version(), '4.0.3', '>=')) {
             return $chan->pop($timeout);
@@ -127,9 +134,7 @@ class Base extends Context
                 if (false === $result || empty($reads)) {
                     return false;
                 }
-
                 $readChannel = $reads[0];
-
                 return $readChannel->pop();
             }
         }

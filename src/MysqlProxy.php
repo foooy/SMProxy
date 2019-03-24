@@ -6,6 +6,8 @@ use function SMProxy\Helper\getBytes;
 use function SMProxy\Helper\getString;
 use function SMProxy\Helper\packageSplit;
 use function SMProxy\Helper\getMysqlPackSize;
+use Swoole\Coroutine\Channel;
+use Swoole\Coroutine\Client;
 use SMProxy\MysqlPacket\AuthPacket;
 use SMProxy\MysqlPacket\BinaryPacket;
 use SMProxy\MysqlPacket\ErrorPacket;
@@ -18,8 +20,6 @@ use SMProxy\MysqlPacket\Util\ErrorCode;
 use SMProxy\MysqlPacket\Util\SecurityUtil;
 use SMProxy\MysqlPool\MySQLException;
 use SMProxy\MysqlPool\MySQLPool;
-use Swoole\Coroutine\Channel;
-use Swoole\Coroutine\Client;
 
 /**
  * Author: Louis Livi <574747417@qq.com>
@@ -28,6 +28,7 @@ use Swoole\Coroutine\Client;
  */
 class MysqlProxy extends MysqlClient
 {
+    private $isDuplex;
     public $server;
     public $serverFd;
     public $charset;
@@ -51,7 +52,10 @@ class MysqlProxy extends MysqlClient
         $this->chan = $chan;
         $this->client = new Client(CONFIG['server']['swoole_client_sock_setting']['sock_type'] ?? SWOOLE_SOCK_TCP);
         $this->client->set(CONFIG['server']['swoole_client_setting'] ?? []);
-        $this->mysqlClient = new Channel(1);
+        $this->isDuplex = version_compare(SWOOLE_VERSION, '4.2.13', '>=');
+        if (!$this->isDuplex) {
+            $this->mysqlClient = new Channel(1);
+        }
     }
 
     /**
@@ -76,10 +80,12 @@ class MysqlProxy extends MysqlClient
                 return false;
             }
         } else {
-            $this->mysqlClient->push($this->client);
+            if (!$this->isDuplex) {
+                $this->mysqlClient->push($this->client);
+            }
             self::go(function () {
                 while (true) {
-                    $data = $this ->recv();
+                    $data = $this->recv();
                     if ($data === '') {
                         break;
                     }
@@ -194,6 +200,7 @@ class MysqlProxy extends MysqlClient
      * @param string $pluginName
      *
      * @return array
+     * @throws MySQLException
      */
     public function processAuth(string $pluginName)
     {
@@ -205,10 +212,10 @@ class MysqlProxy extends MysqlClient
                 $password = SecurityUtil::scrambleSha256($this->account['password'], $this->salt);
                 break;
             case 'sha256_password':
-                new MySQLException('Sha256_password plugin is not supported yet');
+                throw new MySQLException('Sha256_password plugin is not supported yet');
                 break;
             case 'mysql_old_password':
-                new MySQLException('mysql_old_password plugin is not supported yet');
+                throw new MySQLException('mysql_old_password plugin is not supported yet');
                 break;
             case 'mysql_clear_password':
                 $password = array_merge(getBytes($this->account['password']), [0]);
@@ -226,50 +233,65 @@ class MysqlProxy extends MysqlClient
      * @param mixed ...$data
      *
      * @return bool
-     * @throws MySQLException
      */
     public function send(...$data)
     {
-        $client = self::coPop($this->mysqlClient, $this->timeout * 3);
-        if ($client === false) {
-            throw new MySQLException('Send data timeout');
+        if ($this->isDuplex) {
+            if ($this->client->isConnected()) {
+                return $this->client->send(...$data);
+            } else {
+                return false;
+            }
+        } else {
+            $client = self::coPop($this->mysqlClient);
+            if ($client === false) {
+                //连接关闭或超时
+                return false;
+            }
+            if ($client->isConnected()) {
+                $result = $client->send(...$data);
+                $this->mysqlClient->push($client);
+                return $result;
+            }
+            return false;
         }
-        if ($client->isConnected()) {
-            $result = $client->send(...$data);
-            $this->mysqlClient->push($client);
-            return $result;
-        }
-        return false;
     }
 
     /**
      * recv.
      *
      * @return mixed
-     * @throws MySQLException
      */
     public function recv()
     {
-        $client = self::coPop($this->mysqlClient, $this->timeout);
-        if ($client === false) {
-            throw new MySQLException('Receive data timeout');
-        }
-        if ($client->isConnected()) {
-            if (version_compare(swoole_version(), '2.1.2', '>=')) {
+        if ($this->isDuplex) {
+            $data = $this->client->recv(-1);
+            if ($data === '') {
+                $this->onClientClose($this->client);
+            } elseif (is_string($data)) {
+                $this->onClientReceive($this->client, $data);
+            }
+            return $data;
+        } else {
+            $client = self::coPop($this->mysqlClient, $this->timeout);
+            if ($client === false) {
+                //连接关闭或超时
+                return false;
+            }
+            if ($client->isConnected()) {
                 $data = $client->recv($this->timeout / 500);
             } else {
-                $data = $client->recv();
+                $data = '';
             }
-        } else {
-            $data = '';
+            $this->mysqlClient->push($client);
+            if ($data === '') {
+                $this->mysqlClient->close();
+                $this->onClientClose($client);
+            } elseif (is_string($data)) {
+                $this->onClientReceive($client, $data);
+            }
+            return $data;
         }
-        $this->mysqlClient->push($client);
-        if ($data === '') {
-            $this->onClientClose($client);
-        } elseif (is_string($data)) {
-            $this->onClientReceive($client, $data);
-        }
-        return $data;
     }
 
     /**

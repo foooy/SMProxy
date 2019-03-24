@@ -57,17 +57,21 @@ function array_copy(array $array, int $start, int $len)
 }
 
 /**
- * 计算mysql包的大小.
+ * 转换长度.
  *
- * @param $size
+ * @param int $size
+ * @param int $length
  *
  * @return array
  */
-function getMysqlPackSize(int $size)
+function getMysqlPackSize(int $size, int $length = 3)
 {
     $sizeData[] = $size & 0xff;
     $sizeData[] = shr16($size & 0xff << 8, 8);
     $sizeData[] = shr16($size & 0xff << 16, 16);
+    if ($length > 3) {
+        $sizeData[] = shr16($size & 0xff << 24, 24);
+    }
     return $sizeData;
 }
 
@@ -374,7 +378,8 @@ function _error_handler(int $errno, string $errstr, string $errfile, int $errlin
 {
     $errCode = strlen($errstr) > 3 ? substr($errstr, -4, 3) : 0;
     $errMethod = explode(': ', $errstr)[0] ?? '';
-    if (strrpos($errMethod, 'Swoole\Coroutine\Client') === false && $errCode != '110' && $errCode != '111') {
+    if (strrpos($errMethod, 'Swoole\Coroutine\Client') === false && $errCode != '110' && $errCode != '111'
+        && !(basename($errfile) == 'ServerParse.php' && $errno == E_NOTICE)) {
         $system_log = Log::getLogger('system');
         $message = sprintf('%s (%s:%s)', $errstr, $errfile, $errline);
         $errLevel = $errno ? (array_search($errno + 1, Log::$levels) ?: 'error') : 'error';
